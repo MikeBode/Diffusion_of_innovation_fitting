@@ -1,0 +1,178 @@
+function Fit_ThreeCurves(XLS_Filename,BBSL)
+
+% Fits three diffusion of innovation curves to XLSX data and outputs a best-fit figure
+% 
+% FIT_THREECURVES(XLS_Filename,BBSL)
+%
+% XLS_Filename    = Name of the file that the data is saved in. [ i.e. 'text.xlsx' ]
+% BBSL            = Size of the bootstrap blocks for estimating fit uncertainty [ e.g., 5 ]
+%
+% April 2019 - Contact Michael Bode with questions (michael.bode@qut.edu.au)
+
+if nargin == 0
+   XLS_Filename = 'Uptake_data_Terrestrial_PAs.xlsx';
+   BBSL = 5; % This is the number of years in a block   
+end
+
+% ================ Prepare the data for analysis ================
+
+% Extract the data from an Excel spreadsheet
+[D,T] = xlsread(XLS_Filename);
+
+% What's the maximum possible uptake for this population (i.e., how many members are there?).
+MaximumUptake = D(1,3);
+
+% How many years are there in the dataset?
+Years = D(:,1);
+
+% Ensure that the steps are all one timestep
+Steps = Years(2:end)-Years(1:end-1);
+if sum(Steps-1) > 0;
+   disp('Alter the input data so that all timesteps are size 1');
+   return
+end
+
+% How many users are there in the different years?
+Users = D(:,2);
+
+% Save the original data for later use
+OriginalUsers = Users; OriginalYears = Years;
+
+% Delete any years where there are zero users (since these pre-date the process)
+F = find(Users == 0); Users(F) = []; Years(F) = [];
+
+% Delete any repeated terminal years
+F = find(Users == Users(end)); Users(F(4:end)) = []; Years(F(4:end)) = [];
+NumYears = length(Years);
+
+% ================ Fit the data with the three candidate models ================
+options = optimset('Display','off');
+
+% Fit the CONSTANT curve to the original data
+X0c = [10 1 MaximumUptake-Users(end) Years(1)];
+[BestFit_C,SSD_C] = fmincon(@sub_fitting_constant,X0c,[],[],[],[],...
+   [0 1 0 0],[MaximumUptake/length(Years) 10 MaximumUptake-5 Years(1)],[],options,...
+   Users,Years,MaximumUptake,[1:NumYears]);
+[~,Predicted_Constant,Years_Constant] = sub_fitting_constant(BestFit_C,Users,Years,MaximumUptake,[1:NumYears]);
+
+% Fit the ASYMPTOTIC curve to the original data
+X0a = [0.005 1 MaximumUptake-Users(end) Years(1)];
+[BestFit_A,SSD_A] = fmincon(@sub_fitting_asymptotic,X0a,[],[],[],[],...
+   [0 1 0 0],[5 10 MaximumUptake 2500],[],options,...
+   Users,Years,MaximumUptake,[1:NumYears]);
+[~,Predicted_Asymptotic,Years_Asymptotic] = sub_fitting_asymptotic(BestFit_A,Users,Years,MaximumUptake,[1:NumYears]);
+
+% Fit the DIFFUSION curve to the original data
+X0d = [0.0005 1 MaximumUptake-Users(end) Years(1)];
+[BestFit_D,SSD_D] = fmincon(@sub_fitting_diffusion,X0d,[],[],[],[],...
+   [0 1 0 0],[5 10 MaximumUptake 2500],[],options,...
+   Users,Years,MaximumUptake,[1:NumYears]);
+[~,Predicted_Diffusion,Years_Diffusion] = sub_fitting_diffusion(BestFit_D,Users,Years,MaximumUptake,[1:NumYears]);
+
+% ================ Estimate bootstrap uncertainty around the best fit curves ================
+% Do we create block-bootstrap estimates of uncertainty?
+
+if BT == 1
+   
+   for bs = 1:25
+      % Create a block-bootstrap-timeseries in blocks of length BBSL
+      Resamps = ceil(NumYears./BBSL); BlockBootstrap = [];
+      for r = 1:Resamps
+         RS_TS = ceil(rand*(NumYears-BBSL));
+         RS_TS = [RS_TS:RS_TS+BBSL-1];
+         BlockBootstrap = [BlockBootstrap RS_TS];
+      end
+      BestFit_C_bs(bs,:) = fmincon(@sub_fitting_constant,BestFit_C,[],[],[],[],...
+         [0 1 0 0],[MaximumUptake/length(Years) 10 MaximumUptake-5 Years(1)],[],options,...
+         Users,Years,MaximumUptake,BlockBootstrap);
+      [~,Predicted_Constant(:,bs+1)] = sub_fitting_constant(BestFit_C_bs(bs,:),Users,Years,MaximumUptake,[1:NumYears]);
+      
+      BestFit_A_bs(bs,:) = fmincon(@sub_fitting_asymptotic,BestFit_A,[],[],[],[],...
+         [0 1 0 0],[5 10 MaximumUptake 2500],[],options,...
+         Users,Years,MaximumUptake,BlockBootstrap);
+      [~,Predicted_Asymptotic(:,bs+1)] = sub_fitting_asymptotic(BestFit_A_bs(bs,:),Users,Years,MaximumUptake,[1:NumYears]);
+      
+      BestFit_D_bs(bs,:) = fmincon(@sub_fitting_diffusion,BestFit_D,[],[],[],[],...
+         [0 1 0 0],[5 10 MaximumUptake 2500],[],options,...
+         Users,Years,MaximumUptake,BlockBootstrap);
+      [~,Predicted_Diffusion(:,bs+1)] = sub_fitting_diffusion(BestFit_D_bs(bs,:),Users,Years,MaximumUptake,[1:NumYears]);
+   end
+end
+
+figure(1), clf; FS = 14;
+% CONSTANT PLOTTING
+subplot(3,1,1)
+sub_plotting(Predicted_Constant,Years_Constant,Years,Users,MaximumUptake-BestFit_C(3),[0 0.5 0]);
+title('Linear model','fontsize',FS,'fontweight','normal')
+
+% ASYMPTOTIC PLOTTING
+subplot(3,1,2)
+sub_plotting(Predicted_Asymptotic,Years_Asymptotic,Years,Users,MaximumUptake-BestFit_A(3),[0.7 0 0]);
+title('Asympototic model','fontsize',FS,'fontweight','normal')
+
+% DIFFUSIVE PLOTTING
+subplot(3,1,3)
+sub_plotting(Predicted_Diffusion,Years_Diffusion,Years,Users,MaximumUptake-BestFit_D(3),[0 0 0.7]);
+title('Sigmoidal model','fontsize',FS,'fontweight','normal')
+
+set(gcf, 'paperunits', 'centimeters', 'paperposition', [0 0 15 30])
+set(gcf, 'renderer', 'painters')
+print('-dtiff','-r300','BestFitCurves.tiff')
+
+
+%% ====================================================================
+%% ========================== PLOTTING ================================
+%% ====================================================================
+function sub_plotting(Predicted,Years_Model,Years_Data,Users,MaxY,CLR);
+cla, hold on, box on; FS = 12;
+
+Predicted = 100*Predicted./MaxY;
+Users = 100*Users./MaxY;
+
+Q = quantile(Predicted',[0.025 0.975])';
+P = patch([Years_Model; Years_Model(end:-1:1)],[Q(:,1); Q(end:-1:1,2)],CLR);
+set(P,'edgecolor',CLR,'facealpha',0.3);
+% plot(Years_Model,max(0,Predicted(:,1)),'color',CLR,'linewidth',2)
+plot([Years_Data(1)-[3; 2; 1]; Years_Data],[0; 0; 0; Users],'ko','linewidth',1,'markersize',4)
+ylim([0 1.05.*max(Q(:))]);
+XL = xlim; xlim([min(Years_Model) max(Years_Model)])
+
+ylabel('Uptake (%)','fontsize',FS)
+xlabel('Year','fontsize',FS)
+set(gca,'fontsize',FS-2)
+
+%% ===================== DIFFUSION MODEL ==============================
+function [SSD,Yp,YearVec] = sub_fitting_diffusion(X,Y,YearVec,K,BS)
+alpha = X(1); % This is the proportional NET rate of uptake
+A0 = X(2); % Initial number of adopters
+R = X(3); % This is the number of resistant individuals
+T = X(4); % This offsets the starting time
+NumYears = length(YearVec);
+
+Yp = (K - R).*A0./(A0 + (K-R-A0).*exp(-alpha.*(K-R)*(YearVec-T)));
+SSD = sum((Yp(BS)-Y(BS)).^2);
+
+
+%% ===================== ASYMPTOTIC MODEL =============================
+function [SSD,Yp,YearVec] = sub_fitting_asymptotic(X,Y,YearVec,K,BS)
+alpha = X(1); % This is the proportional NET rate of uptake
+A0 = X(2); % Initial number of adopters
+R = X(3); % This is the number of resistant individuals
+T = X(4); % This offsets the starting time
+
+Yp = K - R + (A0 + R - K).*exp(-alpha.*(YearVec-T));
+SSD = sum((Yp(BS)-Y(BS)).^2);
+
+
+%% ===================== CONSTANT MODEL ===============================
+function [SSD,Yp,YearVec] = sub_fitting_constant(X,Y,YearVec,K,BS)
+alpha = X(1); % This is the proportional NET rate of uptake
+A0 = X(2); % Initial number of adopters
+R = X(3); % This is the number of resistant individuals
+T = X(4); % This offsets the starting time
+
+Yp = max(0,min((K-R),alpha.*(YearVec-T)));
+SSD = sum((Yp(BS)-Y(BS)).^2);
+if Yp(end) == 0
+   keyboard
+end
